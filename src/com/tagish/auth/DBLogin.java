@@ -8,6 +8,10 @@ import javax.security.auth.*;
 import javax.security.auth.callback.*;
 import javax.security.auth.login.*;
 
+import java.io.*;
+import javax.xml.bind.DatatypeConverter;
+
+
 /**
  * Simple database based authentication module.
  *
@@ -16,18 +20,21 @@ import javax.security.auth.login.*;
  */
 public class DBLogin extends SimpleLogin
 {
-	protected String                dbDriver;
-	protected String                dbURL;
-	protected String                dbUser;
-	protected String                dbPassword;
-	protected String                userTable;
-	protected String                userColumn;
-	protected String                passColumn;
-	protected String                where;
+    	protected String                dbDriver;
+    	protected String                dbUrl;
+    	protected String                dbUser;
+    	protected String                dbPassword;
+    	protected String                dbTable;
+	protected String                dbColumnPw;
+	protected String                dbColumnLogin;
+    	protected String                hashAlgorithm;
+	protected String                pyPath;
+	protected String                pyModulePath;
+
 
 	protected synchronized Vector validateUser(String username, char password[]) throws LoginException
 	{
-		ResultSet rsu = null, rsr = null;
+		ResultSet rsu = null;
 		Connection con = null;
 		PreparedStatement psu = null;
 
@@ -35,22 +42,28 @@ public class DBLogin extends SimpleLogin
 		{
 			Class.forName(dbDriver);
 			if (dbUser != null)
-			   con = DriverManager.getConnection(dbURL, dbUser, dbPassword);
+			   con = DriverManager.getConnection(dbUrl, dbUser, dbPassword);
 			else
-			   con = DriverManager.getConnection(dbURL);
+			   con = DriverManager.getConnection(dbUrl);
 
-			psu = con.prepareStatement("SELECT " + passColumn + " FROM " + userTable +
-									   " WHERE " + userColumn + "=?" + where);
+			psu = con.prepareStatement("SELECT " + dbColumnPw + " FROM " + dbTable + " WHERE " + dbColumnLogin + "=?");
 
 			/* Set the username to the statement */
 			psu.setString(1, username);
 			rsu = psu.executeQuery();
-			if (!rsu.next()) throw new FailedLoginException("Unknown user");
-			String upwd = rsu.getString(1);
-			String tpwd = new String(password);
+			if (!rsu.next()) throw new FailedLoginException("Credentials not recognized.");
 
-			/* Check the password */
-			if (!upwd.equals(tpwd)) throw new FailedLoginException("Bad password");
+			String password_hash = rsu.getString(1);
+			
+			
+			if (hashAlgorithm.equals("pbkdf2_sha512")) {
+				if (!verify_pbkdf2_sha512(new String(password), password_hash)) {
+                                	throw new FailedLoginException("Credentials not recognized1.");
+				}
+                        }
+			else {
+				throw new LoginException("Not implemented.");
+			}
 
 			Vector p = new Vector();
 			p.add(new TypedPrincipal(username, TypedPrincipal.USER));
@@ -68,12 +81,33 @@ public class DBLogin extends SimpleLogin
 		{
 			try {
 				if (rsu != null) rsu.close();
-				if (rsr != null) rsr.close();
 				if (psu != null) psu.close();
 				if (con != null) con.close();
 			} catch (Exception e) { }
 		}
 	}
+
+        private Boolean verify_pbkdf2_sha512(String pw, String hash)
+        {
+                try {
+                        String pw1 = new String(DatatypeConverter.printBase64Binary(pw.getBytes()));
+                        String hash1 = new String(DatatypeConverter.printBase64Binary(hash.getBytes()));
+
+                        Process p = Runtime.getRuntime().exec(pyPath + " " + pyModulePath + " " + pw1 + " " + hash1);
+
+                        BufferedReader stdInput = new BufferedReader(new
+                        InputStreamReader(p.getInputStream()));
+
+                        String s = stdInput.readLine();
+                        if (s.equals("1")) {
+                                return true;
+                        }
+                        return false;
+                 } catch (IOException e) {
+                        return false;
+                }
+        }
+
 
 	public void initialize(Subject subject, CallbackHandler callbackHandler, Map sharedState, Map options)
 	{
@@ -81,20 +115,22 @@ public class DBLogin extends SimpleLogin
 
 		dbDriver = getOption("dbDriver", null);
 		if (dbDriver == null) throw new Error("No database driver named (dbDriver=?)");
-		dbURL = getOption("dbURL", null);
-		if (dbURL == null) throw new Error("No database URL specified (dbURL=?)");
+
+		dbUrl = getOption("dbUrl", null);
+		if (dbUrl == null) throw new Error("No database URL specified (dbUrl=?)");
+
 		dbUser = getOption("dbUser", null);
 		dbPassword = getOption("dbPassword", null);
 		if ((dbUser == null && dbPassword != null) || (dbUser != null && dbPassword == null))
 		   throw new Error("Either provide dbUser and dbPassword or encode both in dbURL");
 
-		userTable    = getOption("userTable",    "User");
-		userColumn   = getOption("userColumn", "user_name");
-		passColumn   = getOption("passColumn",    "user_passwd");
-		where        = getOption("where",        "");
-		if (null != where && where.length() > 0)
-			where = " AND " + where;
-		else
-			where = "";
+		dbTable = getOption("dbTable", "");
+		dbColumnLogin = getOption("dbColumnLogin", "");
+		dbColumnPw = getOption("dbColumnPw", "");
+
+		hashAlgorithm = getOption("hashAlgorithm", "");
+
+		pyPath = getOption("pyPath", "");
+		pyModulePath = getOption("pyModulePath", "");
 	}
 }
